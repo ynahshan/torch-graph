@@ -126,7 +126,7 @@ class TorchTracer(object):
                            'type_as']
 
         wrapper_descriptor = type(torch.Tensor.__getattribute__)
-        all_methods = inspect.getmembers(torch._C._TensorBase, predicate=inspect.isroutine)
+        all_methods = inspect.getmembers(torch.Tensor, predicate=inspect.isroutine)
         tensor_methods = [f for f in all_methods if type(f[1]) != wrapper_descriptor and f[0] not in exclude_methods]
         return tensor_methods
 

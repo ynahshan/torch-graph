@@ -28,6 +28,13 @@ class TorchOp(object):
         self.inputs = [OpTensor(arg) for arg in args]
         self.output = OpTensor(output) if output is not None else None
 
+        self.is_inplace = False
+        if self.output is not None and self.output.istensor:
+            out_id = self.output.id
+            for inp in self.inputs:
+                if inp.istensor and inp.id == out_id:
+                    self.is_inplace = True
+
     @property
     def op_name(self):
         raise NotImplementedError
@@ -217,7 +224,8 @@ class TorchTracer(object):
                         conn[inp.id] = type('', (object,), {"consumers": [], "producers": []})()
                         conn[inp.id].type = inp.type
 
-                    conn[inp.id].consumers.append(op)
+                    if op not in conn[inp.id].consumers:
+                        conn[inp.id].consumers.append(op)
                 else:
                     conn[id(inp)] = type('', (object,),
                                          {"consumers": [op], "producers": [Nop('const{}'.format(const_counter))]})()
@@ -228,7 +236,8 @@ class TorchTracer(object):
                     conn[op.output.id] = type('', (object,), {"consumers": [], "producers": []})()
                     conn[op.output.id].type = op.output.type
 
-                conn[op.output.id].producers.append(op)
+                if op not in conn[op.output.id].producers:
+                    conn[op.output.id].producers.append(op)
             else:
                 conn[id(op.output)] = type('', (object,),
                                            {"consumers": [Nop('scalar{}'.format(scalar_counter))], "producers": [op]})()
@@ -239,7 +248,7 @@ class TorchTracer(object):
             if len(conn[e].consumers) == 0:
                 conn[e].consumers.append(Nop('{}{}'.format(conn[e].type.__name__, tensor_counter)))
                 tensor_counter += 1
-            if len(conn[e].producers) == 0:
+            if len(conn[e].producers) == 0 or (len(conn[e].producers) == 1 and conn[e].producers[0].is_inplace):
                 conn[e].producers.append(Nop('{}{}'.format(str(conn[e].type.__name__), tensor_counter)))
                 tensor_counter += 1
 

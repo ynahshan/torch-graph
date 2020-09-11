@@ -1,4 +1,5 @@
 import graphviz
+import networkx as nx
 
 
 class Graph(object):
@@ -30,6 +31,11 @@ class Graph(object):
         else:
             self.gdict[vrtx1] = [vrtx2]
 
+    def remove_edge(self, vrtx1, vrtx2):
+        if vrtx1 in self.gdict:
+            if vrtx2 in self.gdict[vrtx1]:
+                self.gdict[vrtx1].remove(vrtx2)
+
     def get_node(self, node_name):
         for node in self.get_nodes():
             if node.name == node_name:
@@ -52,11 +58,25 @@ class Graph(object):
         else:
             g = graphviz.Graph()
 
-        for vrtx in self.get_nodes():
-            g.node(vrtx.name) if hasattr(vrtx, 'name') else vrtx
+        for v in self.get_nodes():
+            g.node(v.name) if hasattr(v, 'name') else v
 
-        for vrtx1, vrtx2 in self.get_edges():
-            g.edge(vrtx1.name if hasattr(vrtx1, 'name') else vrtx1, vrtx2.name if hasattr(vrtx2, 'name') else vrtx2)
+        for v1, v2 in self.get_edges():
+            g.edge(v1.name if hasattr(v1, 'name') else v1, v2.name if hasattr(v2, 'name') else v2)
+
+        return g
+
+    def to_nx(self):
+        if self.is_directed:
+            g = nx.DiGraph()
+        else:
+            g = nx.Graph()
+
+        for v in self.get_nodes():
+            g.add_node(v.name) if hasattr(v, 'name') else v
+
+        for v1, v2 in self.get_edges():
+            g.add_edge(v1.name if hasattr(v1, 'name') else v1, v2.name if hasattr(v2, 'name') else v2)
 
         return g
 

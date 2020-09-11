@@ -2,6 +2,7 @@ import torch
 import inspect
 import types
 from functools import wraps
+import networkx as nx
 from .graph import Graph
 
 
@@ -14,11 +15,12 @@ class OpTensor(object):
             self.shape = inp.shape
             self.dtype = inp.dtype
             self.id = inp.data_ptr()
+            self.tensor_id = id(inp)
 
     def __repr__(self):
         res = "name: {}, type: {}".format(self.name, self.type)
         if self.istensor:
-            res1 = ", Tensor: shape {}, dtype {}, id {}".format(self.shape, self.dtype, self.id)
+            res1 = ", Tensor: shape {}, dtype {}, id {}, tensor_id {}".format(self.shape, self.dtype, self.id, self.tensor_id)
             res += res1
         return res
 
@@ -217,7 +219,8 @@ class TorchTracer(object):
         tensor_counter = const_counter = scalar_counter = 0
         # Find all connections
         conn = {}
-        for op in trace:
+        for i, op in enumerate(trace):
+            op.idx = i
             for inp in op.inputs:
                 if inp.istensor:
                     if inp.id not in conn:
@@ -268,4 +271,79 @@ class TorchTracer(object):
                 for c in conn[e].consumers:
                     g.add_edge(p, c)
 
+        # Perform graph cleanups. Consider in future to allow to disable those cleanups.
+
+        # remove self connections
+        TorchTracer.remove_inplace_self_connections(g)
+        TorchTracer.fix_inplace_bidirectional_edges(g)
+        # To improve performance of searching for all paths first prone connections via single inplace node
+        TorchTracer.prune_connections_via_inplace_node(g)
+        # Warning!!! Need to do 2 iterations of inplace paths removal.
+        # Could be problem with algorithm and require more iterations on other models than resnet18.
+        TorchTracer.prune_connections_via_inplace_path(g)
+        TorchTracer.prune_connections_via_inplace_path(g)
+        # Sometimes pytorch resuses memory between different operations.
+        # This produces connections which not really exists.
+        TorchTracer.prune_connections_due_to_optimization(g)
+
         return g
+
+    @staticmethod
+    def remove_inplace_self_connections(graph):
+        for node in graph.get_nodes():
+            graph.remove_edge(node, node)
+
+    @staticmethod
+    def fix_inplace_bidirectional_edges(graph):
+        nxg = graph.to_nx()
+        strongly_connected = [n for n in nx.strongly_connected_components(nxg) if len(n) > 1]
+        for cluster in strongly_connected:
+            cluster_ops = [graph.get_node(node) for node in cluster]
+            for i in range(len(cluster_ops)):
+                for j in range(i + 1, len(cluster_ops)):
+                    if cluster_ops[i].is_inplace or cluster_ops[j].is_inplace:
+                        # op i goes before op j
+                        if cluster_ops[i].idx < cluster_ops[j].idx:
+                            graph.remove_edge(cluster_ops[j], cluster_ops[i])
+                        else:
+                            graph.remove_edge(cluster_ops[i], cluster_ops[j])
+
+    @staticmethod
+    def prune_connections_via_inplace_node(graph):
+        for node in graph.get_nodes():
+            for con_node in graph.gdict[node]:
+                if node != con_node and con_node.is_inplace:
+                    # prune connections via inplace op
+                    for n in graph.gdict[con_node]:
+                        if n in graph.gdict[node] and n != con_node:
+                            # print("remove {}->{}".format(node.name, n.name))
+                            graph.remove_edge(node, n)
+
+    @staticmethod
+    def prune_connections_via_inplace_path(graph):
+        nxg = graph.to_nx()
+        for node in graph.get_nodes():
+            for con_node in graph.gdict[node]:
+                if node != con_node:
+                    all_paths = [p for p in nx.algorithms.simple_paths.all_simple_paths(nxg, node.name, con_node.name)
+                                 if len(p) > 2]
+                    for p in all_paths:
+                        # if two nodes connected by inplace ops
+                        inplace_path = True
+                        for i in range(1, len(p) - 1):
+                            inplace_path = inplace_path and graph.get_node(p[i]).is_inplace
+
+                        # prune connection
+                        if inplace_path:
+                            graph.remove_edge(node, con_node)
+                            break
+
+    @staticmethod
+    def prune_connections_due_to_optimization(graph):
+        for (node1, node2) in graph.get_edges():
+            if node1.output is not None:
+                target = [inp for inp in node2.inputs if inp.istensor and inp.id == node1.output.id]
+                if len(target) > 0:
+                    # prune connections created by memory reuse optimization
+                    if node1.output.tensor_id != target[0].tensor_id:
+                        graph.remove_edge(node1, node2)

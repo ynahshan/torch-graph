@@ -93,10 +93,12 @@ class TorchTracer(object):
         self.trace_ = []
         self.torch = types.SimpleNamespace()
         self.Tensor = types.SimpleNamespace()
+        self.nn_functional = types.SimpleNamespace()
         setattr(self.torch, 'funcs', [])
         setattr(self.Tensor, 'funcs', [])
+        setattr(self.nn_functional, 'funcs', [])
 
-        # Wrap torch.xxx functions
+        # Wrap torch methods
         for name in dir(torch._C._VariableFunctions):
             if name.startswith('__') or name.startswith('_'):
                 continue
@@ -115,6 +117,14 @@ class TorchTracer(object):
                 setattr(self.Tensor, name, func)
                 setattr(torch.Tensor, name, self.wrap_func(func))
 
+        # Wrap torch.nn.functional methods
+        nn_methods = self._get_nn_functional_methods()
+        for name, func in nn_methods:
+            if hasattr(torch.nn.functional, name):
+                self.nn_functional.funcs.append(name)
+                setattr(self.nn_functional, name, func)
+                setattr(torch.nn.functional, name, self.wrap_func(func))
+
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -122,6 +132,8 @@ class TorchTracer(object):
             setattr(torch, name, getattr(self.torch, name))
         for name in self.Tensor.funcs:
             setattr(torch.Tensor, name, getattr(self.Tensor, name))
+        for name in self.nn_functional.funcs:
+            setattr(torch.nn.functional, name, getattr(self.nn_functional, name))
 
     def _get_tensor_methods(self):
         exclude_methods = ['__format__',
@@ -138,6 +150,13 @@ class TorchTracer(object):
         all_methods = inspect.getmembers(torch.Tensor, predicate=inspect.isroutine)
         tensor_methods = [f for f in all_methods if type(f[1]) != wrapper_descriptor and f[0] not in exclude_methods]
         return tensor_methods
+
+    def _get_nn_functional_methods(self):
+        all_methods = [f for f in inspect.getmembers(torch.nn.functional, predicate=inspect.isroutine) if
+                       not f[0].startswith('_')]
+        exclude_torch = [f for f in all_methods if not hasattr(torch, f[0])]
+        exclude_tensor = [f for f in exclude_torch if not hasattr(torch.Tensor, f[0])]
+        return exclude_tensor
 
     def wrap_func(self, func):
         @wraps(func)
@@ -276,15 +295,15 @@ class TorchTracer(object):
         # remove self connections
         TorchTracer.remove_inplace_self_connections(g)
         TorchTracer.fix_inplace_bidirectional_edges(g)
+        # Sometimes pytorch resuses memory between different operations.
+        # This produces connections which not really exists.
+        TorchTracer.prune_connections_due_to_optimization(g)
         # To improve performance of searching for all paths first prone connections via single inplace node
         TorchTracer.prune_connections_via_inplace_node(g)
         # Warning!!! Need to do 2 iterations of inplace paths removal.
         # Could be problem with algorithm and require more iterations on other models than resnet18.
         TorchTracer.prune_connections_via_inplace_path(g)
         TorchTracer.prune_connections_via_inplace_path(g)
-        # Sometimes pytorch resuses memory between different operations.
-        # This produces connections which not really exists.
-        TorchTracer.prune_connections_due_to_optimization(g)
 
         return g
 
@@ -324,8 +343,9 @@ class TorchTracer(object):
         nxg = graph.to_nx()
         for node in graph.get_nodes():
             for con_node in graph.gdict[node]:
-                if node != con_node:
-                    all_paths = [p for p in nx.algorithms.simple_paths.all_simple_paths(nxg, node.name, con_node.name)
+                if node != con_node and not isinstance(node, Nop) and not isinstance(con_node, Nop):
+                    max_dist = con_node.idx - node.idx
+                    all_paths = [p for p in nx.algorithms.simple_paths.all_simple_paths(nxg, node.name, con_node.name, max_dist)
                                  if len(p) > 2]
                     for p in all_paths:
                         # if two nodes connected by inplace ops

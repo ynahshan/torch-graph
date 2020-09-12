@@ -27,7 +27,13 @@ class OpTensor(object):
 
 class TorchOp(object):
     def __init__(self, args=[], output=None):
-        self.inputs = [OpTensor(arg) for arg in args]
+        self.inputs = []
+        for arg in args:
+            if isinstance(arg, list):
+                for inp in arg:
+                    self.inputs.append(OpTensor(inp))
+            else:
+                self.inputs.append(OpTensor(arg))
         self.output = OpTensor(output) if output is not None else None
 
         self.is_inplace = False
@@ -44,7 +50,7 @@ class TorchOp(object):
     def __repr__(self):
         res = "({} - {}, \ninputs:\n".format(self.__class__.__name__, self.op_name)
         for i, inp in enumerate(self.inputs):
-            res += '\tinput{} - '.format(i) + inp.__repr__()
+            res += '\ninput{} - '.format(i) + inp.__repr__()
         res += "\n output: "
         if self.output is not None:
             res += self.output.__repr__()
@@ -344,7 +350,7 @@ class TorchTracer(object):
         for node in graph.get_nodes():
             for con_node in graph.gdict[node]:
                 if node != con_node and not isinstance(node, Nop) and not isinstance(con_node, Nop):
-                    max_dist = con_node.idx - node.idx
+                    max_dist = min(con_node.idx - node.idx, 10)
                     all_paths = [p for p in nx.algorithms.simple_paths.all_simple_paths(nxg, node.name, con_node.name, max_dist)
                                  if len(p) > 2]
                     for p in all_paths:

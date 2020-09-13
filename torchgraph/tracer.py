@@ -10,16 +10,20 @@ class OpTensor(object):
     def __init__(self, inp, name=''):
         self.name = name
         self.type = type(inp)
-        self.istensor = isinstance(inp, torch.Tensor)
-        if self.istensor:
+        self._istensor = isinstance(inp, torch.Tensor)
+        if self._istensor:
             self.shape = inp.shape
             self.dtype = inp.dtype
             self.id = inp.data_ptr()
             self.tensor_id = id(inp)
 
+    @property
+    def is_tensor(self):
+        return self._istensor
+
     def __repr__(self):
         res = "name: {}, type: {}".format(self.name, self.type)
-        if self.istensor:
+        if self._istensor:
             tensor_type = self.type.__name__
             res1 = ", {}: shape {}, dtype {}, id {}, tensor_id {}".format(tensor_type, self.shape, self.dtype, self.id, self.tensor_id)
             res += res1
@@ -43,11 +47,15 @@ class TorchOp(object):
         else:
             self.outputs.append(OpTensor(output))
 
-        self.is_inplace = False
-        inp_ids = [inp.id for inp in self.inputs if inp.istensor]
+        self._isinplace = False
+        inp_ids = [inp.id for inp in self.inputs if inp.is_tensor]
         for out in self.outputs:
-            if out.istensor and out.id in inp_ids:
-                self.is_inplace = True
+            if out.is_tensor and out.id in inp_ids:
+                self._isinplace = True
+
+    @property
+    def is_inplace(self):
+        return self._isinplace
 
     @property
     def op_name(self):
@@ -253,7 +261,7 @@ class TorchTracer(object):
         for i, op in enumerate(trace):
             op.idx = i
             for inp in op.inputs:
-                if inp.istensor:
+                if inp.is_tensor:
                     if inp.id not in conn:
                         conn[inp.id] = type('', (object,), {"consumers": [], "producers": []})()
                         conn[inp.id].type = inp.type
@@ -265,7 +273,7 @@ class TorchTracer(object):
                                          {"consumers": [op], "producers": [Nop('const{}'.format(const_counter))]})()
                     const_counter += 1
             for out in op.outputs:
-                if out.istensor:
+                if out.is_tensor:
                     if out.id not in conn:
                         conn[out.id] = type('', (object,), {"consumers": [], "producers": []})()
                         conn[out.id].type = out.type
@@ -374,7 +382,7 @@ class TorchTracer(object):
     def prune_connections_due_to_optimization(graph):
         for (node1, node2) in graph.get_edges():
             for out in node1.outputs:
-                target = [inp for inp in node2.inputs if inp.istensor and out.istensor and inp.id == out.id]
+                target = [inp for inp in node2.inputs if inp.is_tensor and out.is_tensor and inp.id == out.id]
                 if len(target) > 0:
                     # prune connections created by memory reuse optimization
                     if out.tensor_id != target[0].tensor_id:

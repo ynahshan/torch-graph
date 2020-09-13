@@ -93,15 +93,61 @@ class ModuleOp(TorchOp):
         return self.module.__class__.__name__
 
 
-class Nop(TorchOp):
-    def __init__(self, name):
-        super(Nop, self).__init__()
+class ScalarOp(TorchOp):
+    def __init__(self, name, inp_id=None, out_id=None):
+        super(ScalarOp, self).__init__()
         self._op_name = name
         self.name = name
+        self.inp_id = inp_id
+        self.out_id = out_id
 
     @property
     def op_name(self):
         return self._op_name
+
+    def __repr__(self):
+        res = super(ScalarOp, self).__repr__()
+        if self.inp_id is not None:
+            res += "\ninput id: {}".format(self.inp_id)
+        if self.out_id is not None:
+            res += "\noutput id: {}".format(self.out_id)
+        return res
+
+
+class InputOp(TorchOp):
+    def __init__(self, name, out_id=None):
+        super(InputOp, self).__init__()
+        self._op_name = name
+        self.name = name
+        self.out_id = out_id
+
+    @property
+    def op_name(self):
+        return self._op_name
+
+    def __repr__(self):
+        res = super(InputOp, self).__repr__()
+        if self.out_id is not None:
+            res += "\noutput id: {}".format(self.out_id)
+        return res
+
+
+class OutputOp(TorchOp):
+    def __init__(self, name, inp_id=None):
+        super(OutputOp, self).__init__()
+        self._op_name = name
+        self.name = name
+        self.inp_id = inp_id
+
+    @property
+    def op_name(self):
+        return self._op_name
+
+    def __repr__(self):
+        res = super(OutputOp, self).__repr__()
+        if self.inp_id is not None:
+            res += "\ninput id: {}".format(self.inp_id)
+        return res
 
 
 class TorchTracer(object):
@@ -236,7 +282,7 @@ class TorchTracer(object):
             return TorchTracer.trace_to_graph(node.ops)
         elif isinstance(node, FuncOp):
             return TorchTracer.trace_to_graph([node])
-        elif isinstance(node, Nop):
+        elif isinstance(node, ScalarOp):
             g = Graph()
             g.add_node(node)
             return g
@@ -270,7 +316,7 @@ class TorchTracer(object):
                         conn[inp.id].consumers.append(op)
                 else:
                     conn[id(inp)] = type('', (object,),
-                                         {"consumers": [op], "producers": [Nop('const{}'.format(const_counter))]})()
+                                         {"consumers": [op], "producers": [ScalarOp('const{}'.format(const_counter), out_id=id(inp))]})()
                     const_counter += 1
             for out in op.outputs:
                 if out.is_tensor:
@@ -282,16 +328,20 @@ class TorchTracer(object):
                         conn[out.id].producers.append(op)
                 else:
                     conn[id(out)] = type('', (object,),
-                                               {"consumers": [Nop('scalar{}'.format(scalar_counter))], "producers": [op]})()
+                                               {"consumers": [ScalarOp('scalar{}'.format(scalar_counter), inp_id=id(out))], "producers": [op]})()
                     scalar_counter += 1
 
-        # create input/output nodes for not connected tensors
+        # create input/output nodes for not connected tensors (inputs/ouputs)
         for e in conn:
             if len(conn[e].consumers) == 0:
-                conn[e].consumers.append(Nop('{}{}'.format(conn[e].type.__name__, tensor_counter)))
+                op = OutputOp('{}{}'.format(conn[e].type.__name__, tensor_counter), inp_id=e)
+                trace.append(op)
+                conn[e].consumers.append(op)
                 tensor_counter += 1
             if len(conn[e].producers) == 0 or (len(conn[e].producers) == 1 and conn[e].producers[0].is_inplace):
-                conn[e].producers.append(Nop('{}{}'.format(str(conn[e].type.__name__), tensor_counter)))
+                op = InputOp('{}{}'.format(str(conn[e].type.__name__), tensor_counter), out_id=e)
+                trace.insert(0, op)
+                conn[e].producers.append(op)
                 tensor_counter += 1
 
         # create graph from connections
@@ -363,7 +413,7 @@ class TorchTracer(object):
         nxg = graph.to_nx()
         for node in graph.get_nodes():
             for con_node in graph.gdict[node]:
-                if node != con_node and not isinstance(node, Nop) and not isinstance(con_node, Nop):
+                if node != con_node and not isinstance(node, InputOp) and not isinstance(con_node, OutputOp) and not isinstance(node, ScalarOp) and not isinstance(con_node, ScalarOp):
                     max_dist = min(con_node.idx - node.idx, 10)
                     all_paths = [p for p in nx.algorithms.simple_paths.all_simple_paths(nxg, node.name, con_node.name, max_dist)
                                  if len(p) > 2]
@@ -381,9 +431,10 @@ class TorchTracer(object):
     @staticmethod
     def prune_connections_due_to_optimization(graph):
         for (node1, node2) in graph.get_edges():
-            for out in node1.outputs:
-                target = [inp for inp in node2.inputs if inp.is_tensor and out.is_tensor and inp.id == out.id]
-                if len(target) > 0:
-                    # prune connections created by memory reuse optimization
-                    if out.tensor_id != target[0].tensor_id:
-                        graph.remove_edge(node1, node2)
+            if not isinstance(node1, InputOp) and not isinstance(node2, OutputOp) and not isinstance(node1, ScalarOp) and not isinstance(node2, ScalarOp):
+                for out in node1.outputs:
+                    target = [inp for inp in node2.inputs if inp.is_tensor and out.is_tensor and inp.id == out.id]
+                    if len(target) > 0:
+                        # prune connections created by memory reuse optimization
+                        if out.tensor_id != target[0].tensor_id:
+                            graph.remove_edge(node1, node2)

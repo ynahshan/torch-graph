@@ -20,7 +20,8 @@ class OpTensor(object):
     def __repr__(self):
         res = "name: {}, type: {}".format(self.name, self.type)
         if self.istensor:
-            res1 = ", Tensor: shape {}, dtype {}, id {}, tensor_id {}".format(self.shape, self.dtype, self.id, self.tensor_id)
+            tensor_type = self.type.__name__
+            res1 = ", {}: shape {}, dtype {}, id {}, tensor_id {}".format(tensor_type, self.shape, self.dtype, self.id, self.tensor_id)
             res += res1
         return res
 
@@ -29,19 +30,24 @@ class TorchOp(object):
     def __init__(self, args=[], output=None):
         self.inputs = []
         for arg in args:
-            if isinstance(arg, list):
+            if isinstance(arg, list) or isinstance(arg, tuple):
                 for inp in arg:
                     self.inputs.append(OpTensor(inp))
             else:
                 self.inputs.append(OpTensor(arg))
-        self.output = OpTensor(output) if output is not None else None
+
+        self.outputs = []
+        if isinstance(output, list) or isinstance(output, tuple):
+            for out in output:
+                self.outputs.append(OpTensor(out))
+        else:
+            self.outputs.append(OpTensor(output))
 
         self.is_inplace = False
-        if self.output is not None and self.output.istensor:
-            out_id = self.output.id
-            for inp in self.inputs:
-                if inp.istensor and inp.id == out_id:
-                    self.is_inplace = True
+        inp_ids = [inp.id for inp in self.inputs if inp.istensor]
+        for out in self.outputs:
+            if out.istensor and out.id in inp_ids:
+                self.is_inplace = True
 
     @property
     def op_name(self):
@@ -51,9 +57,9 @@ class TorchOp(object):
         res = "({} - {}, \ninputs:\n".format(self.__class__.__name__, self.op_name)
         for i, inp in enumerate(self.inputs):
             res += '\ninput{} - '.format(i) + inp.__repr__()
-        res += "\n output: "
-        if self.output is not None:
-            res += self.output.__repr__()
+        res += "\n outputs: "
+        for i, inp in enumerate(self.outputs):
+            res += '\noutput{} - '.format(i) + inp.__repr__()
         res += "\n)"
         return res
 
@@ -258,18 +264,18 @@ class TorchTracer(object):
                     conn[id(inp)] = type('', (object,),
                                          {"consumers": [op], "producers": [Nop('const{}'.format(const_counter))]})()
                     const_counter += 1
+            for out in op.outputs:
+                if out.istensor:
+                    if out.id not in conn:
+                        conn[out.id] = type('', (object,), {"consumers": [], "producers": []})()
+                        conn[out.id].type = out.type
 
-            if op.output.istensor:
-                if op.output.id not in conn:
-                    conn[op.output.id] = type('', (object,), {"consumers": [], "producers": []})()
-                    conn[op.output.id].type = op.output.type
-
-                if op not in conn[op.output.id].producers:
-                    conn[op.output.id].producers.append(op)
-            else:
-                conn[id(op.output)] = type('', (object,),
-                                           {"consumers": [Nop('scalar{}'.format(scalar_counter))], "producers": [op]})()
-                scalar_counter += 1
+                    if op not in conn[out.id].producers:
+                        conn[out.id].producers.append(op)
+                else:
+                    conn[id(out)] = type('', (object,),
+                                               {"consumers": [Nop('scalar{}'.format(scalar_counter))], "producers": [op]})()
+                    scalar_counter += 1
 
         # create input/output nodes for not connected tensors
         for e in conn:
@@ -367,9 +373,9 @@ class TorchTracer(object):
     @staticmethod
     def prune_connections_due_to_optimization(graph):
         for (node1, node2) in graph.get_edges():
-            if node1.output is not None:
-                target = [inp for inp in node2.inputs if inp.istensor and inp.id == node1.output.id]
+            for out in node1.outputs:
+                target = [inp for inp in node2.inputs if inp.istensor and out.istensor and inp.id == out.id]
                 if len(target) > 0:
                     # prune connections created by memory reuse optimization
-                    if node1.output.tensor_id != target[0].tensor_id:
+                    if out.tensor_id != target[0].tensor_id:
                         graph.remove_edge(node1, node2)

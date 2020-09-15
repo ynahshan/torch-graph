@@ -202,15 +202,9 @@ class TorchTracer(object):
             setattr(torch.nn.functional, name, getattr(self.nn_functional, name))
 
     def _get_tensor_methods(self):
-        exclude_methods = ['__format__',
-                           '__dir__',
-                           '__sizeof__',
-                           '_is_view',
-                           '_make_subclass',
-                           '_values',
-                           'data_ptr',
-                           'type',
-                           'type_as']
+        exclude_methods = ['__format__', '__dir__', '__len__', '__sizeof__', '__bool__', '__float__',
+                           '__int__', '_is_view', '_make_subclass', '_values', 'data_ptr', 'type',
+                           'type_as', 'detach', 'dim', 'flatten', 'numel', 'size', 'to']
 
         wrapper_descriptor = type(torch.Tensor.__getattribute__)
         all_methods = inspect.getmembers(torch.Tensor, predicate=inspect.isroutine)

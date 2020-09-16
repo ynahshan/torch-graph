@@ -76,6 +76,7 @@ class FuncOp(TorchOp):
     def __init__(self, func, args, output):
         super(FuncOp, self).__init__(args, output)
         self._op_name = func.__name__
+        self.op_type = 'function'
 
     @property
     def op_name(self):
@@ -87,6 +88,7 @@ class ModuleOp(TorchOp):
         super(ModuleOp, self).__init__(args, output)
         self.module = module
         self.ops = []
+        self.op_type = 'module'
 
     @property
     def op_name(self):
@@ -100,6 +102,7 @@ class ScalarOp(TorchOp):
         self.name = name
         self.inp_id = inp_id
         self.out_id = out_id
+        self.op_type = 'scalar'
 
     @property
     def op_name(self):
@@ -120,6 +123,7 @@ class InputOp(TorchOp):
         self._op_name = name
         self.name = name
         self.out_id = out_id
+        self.op_type = 'input'
 
     @property
     def op_name(self):
@@ -138,6 +142,7 @@ class OutputOp(TorchOp):
         self._op_name = name
         self.name = name
         self.inp_id = inp_id
+        self.op_type = 'output'
 
     @property
     def op_name(self):

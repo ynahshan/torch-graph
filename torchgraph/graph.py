@@ -41,6 +41,17 @@ class Graph(object):
             if node.name == node_name:
                 return node
 
+    def get_node_connections(self, node):
+        return self.gdict[node]
+
+    def get_nodes_by_predicate(self, predicate):
+        res_nodes = []
+        for node in self.get_nodes():
+            if predicate(node):
+                res_nodes.append(node)
+
+        return res_nodes
+
     def to_namegraph(self):
         g = Graph(is_directed=self.is_directed)
 
